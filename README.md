@@ -1,5 +1,12 @@
 # Fiverr Auto Refresher
 
+![Main screen with controls](app_images/1.png)
+![Floating timer bubble overlay](app_images/2.png)
+
+What you see above:
+- Left: the in-app control panel where you set the refresh interval, start/stop automation, run a one-time Tap Test, and jump to Accessibility/Battery settings.
+- Right: the floating timer bubble that appears while automation runs. It shows the live countdown, can be dragged anywhere (snaps to an edge), and tapping it brings the app back up.
+
 Keep your Fiverr profile active with a lightweight, accessibility-driven auto refresher. The app opens Fiverr, waits, swipes down to refresh, and repeats on your chosen interval. A one-tap test flow lets you verify everything works before running it continuously.
 
 ## Why it’s useful
