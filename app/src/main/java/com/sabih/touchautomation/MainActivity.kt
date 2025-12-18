@@ -10,6 +10,7 @@ import android.os.PowerManager
 import android.provider.Settings
 import android.text.TextUtils
 import android.view.LayoutInflater
+import android.view.WindowManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
@@ -40,11 +41,23 @@ class MainActivity : ComponentActivity() {
     private var startButtonRef: Button? = null
     private var stopButtonRef: Button? = null
     private var batteryButtonRef: Button? = null
+    private var floatingTimerButtonRef: Button? = null
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var nextRefreshView: TextView? = null
+    private var nextRefreshAtMs: Long? = null
+    private var wantsFloatingTimer = false
+    private var pendingEnableFloatingTimer = false
 
     private val batteryOptLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) {
         updateBatteryButtonVisibility()
+    }
+
+    private val overlayPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        handleOverlayPermissionResult()
     }
 
     // Repeating job: opens Fiverr, waits briefly, swipes down to refresh, then waits 5–6 minutes.
@@ -89,10 +102,17 @@ class MainActivity : ComponentActivity() {
                         coords.startY,
                         coords.endY
                     )
+                    // After this refresh, set the next target for the interval.
+                    nextRefreshAtMs = System.currentTimeMillis() + autoRefreshIntervalMs
+                    startCountdownIfNeeded()
+                    refreshFloatingTimer()
                 }
                 pendingRefreshRunnable = null
             }
             pendingRefreshRunnable = refreshRunnable
+            nextRefreshAtMs = System.currentTimeMillis() + APP_LAUNCH_WAIT_MS
+            startCountdownIfNeeded()
+            refreshFloatingTimer()
             handler.postDelayed(refreshRunnable, APP_LAUNCH_WAIT_MS)
 
             // Queue the next cycle using the user-selected interval.
@@ -102,6 +122,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        wantsFloatingTimer = loadFloatingTimerPreference()
         enableEdgeToEdge()
         setContent {
             FiverrAutoRefresherTheme {
@@ -118,14 +139,19 @@ class MainActivity : ComponentActivity() {
                                 val openFiverrButton = findViewById<Button>(R.id.buttonOpenFiverr)
                                 val batteryButton = findViewById<Button>(R.id.buttonBatterySettings)
                                 val accessibilityButton = findViewById<Button>(R.id.buttonAccessibilitySettings)
+                                val floatingTimerButton = findViewById<Button>(R.id.buttonFloatingTimer)
                                 autoRefreshInfoView = findViewById(R.id.textAutoRefreshInfo)
                                 intervalInput = findViewById(R.id.editIntervalMinutes)
+                                nextRefreshView = findViewById(R.id.textNextRefresh)
                                 startButtonRef = startButton
                                 stopButtonRef = stopButton
                                 batteryButtonRef = batteryButton
+                                floatingTimerButtonRef = floatingTimerButton
                                 updateAutoRefreshStatus(isAutomationRunning)
                                 updateButtonStates()
                                 updateBatteryButtonVisibility()
+                                updateNextRefreshDisplay()
+                                updateFloatingTimerButton()
 
                                 startButton.setOnClickListener { startAutomationWithChecks(context) }
 
@@ -183,6 +209,10 @@ class MainActivity : ComponentActivity() {
                                     openAccessibilitySettings()
                                 }
 
+                                floatingTimerButton.setOnClickListener {
+                                    toggleFloatingTimer()
+                                }
+
                                 promptBatteryOptimizationIfNeeded()
                             }
                         }
@@ -223,6 +253,10 @@ class MainActivity : ComponentActivity() {
         handler.post(automationRunnable)
         updateAutoRefreshStatus(true)
         updateButtonStates()
+        keepScreenOn(true)
+        acquireWakeLock()
+        startCountdownIfNeeded()
+        refreshFloatingTimer()
     }
 
     private fun stopAutomation() {
@@ -232,6 +266,11 @@ class MainActivity : ComponentActivity() {
         pendingRefreshRunnable = null
         updateAutoRefreshStatus(false)
         updateButtonStates()
+        keepScreenOn(false)
+        releaseWakeLock()
+        nextRefreshAtMs = null
+        stopCountdown()
+        refreshFloatingTimer()
     }
 
     private fun isAccessibilityReady(): Boolean {
@@ -370,6 +409,10 @@ class MainActivity : ComponentActivity() {
         intervalInput = null
         startButtonRef = null
         stopButtonRef = null
+        batteryButtonRef = null
+        floatingTimerButtonRef = null
+        nextRefreshView = null
+        releaseWakeLock()
     }
 
     private fun updateAutoRefreshStatus(running: Boolean) {
@@ -389,9 +432,144 @@ class MainActivity : ComponentActivity() {
         batteryButtonRef?.isVisible = visible
     }
 
+    private fun updateFloatingTimerButton() {
+        floatingTimerButtonRef?.text = if (wantsFloatingTimer) {
+            "Disable Floating Timer"
+        } else {
+            "Enable Floating Timer"
+        }
+    }
+
+    private fun toggleFloatingTimer() {
+        if (wantsFloatingTimer) {
+            wantsFloatingTimer = false
+            saveFloatingTimerPreference(false)
+            FloatingTimerService.updateTimer(this, false, null)
+            updateFloatingTimerButton()
+            Toast.makeText(this, "Floating timer hidden.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        if (Settings.canDrawOverlays(this)) {
+            wantsFloatingTimer = true
+            saveFloatingTimerPreference(true)
+            updateFloatingTimerButton()
+            refreshFloatingTimer()
+            Toast.makeText(
+                this,
+                "Floating timer enabled. It appears while automation is running.",
+                Toast.LENGTH_SHORT
+            ).show()
+        } else {
+            pendingEnableFloatingTimer = true
+            openOverlayPermissionSettings()
+            Toast.makeText(
+                this,
+                "Allow drawing over other apps to show the floating timer.",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    private fun handleOverlayPermissionResult() {
+        val allowed = Settings.canDrawOverlays(this)
+        if (pendingEnableFloatingTimer) {
+            if (allowed) {
+                wantsFloatingTimer = true
+                saveFloatingTimerPreference(true)
+                refreshFloatingTimer()
+                Toast.makeText(
+                    this,
+                    "Floating timer enabled. It appears while automation is running.",
+                    Toast.LENGTH_SHORT
+                ).show()
+            } else {
+                Toast.makeText(
+                    this,
+                    "Overlay permission denied. Floating timer cannot be shown.",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+        pendingEnableFloatingTimer = false
+        updateFloatingTimerButton()
+    }
+
+    private fun openOverlayPermissionSettings() {
+        val intent = Intent(
+            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+            Uri.parse("package:$packageName")
+        )
+        try {
+            overlayPermissionLauncher.launch(intent)
+        } catch (e: Exception) {
+            Toast.makeText(
+                this,
+                "Unable to open overlay settings on this device.",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    private fun refreshFloatingTimer() {
+        if (!Settings.canDrawOverlays(this)) {
+            FloatingTimerService.updateTimer(this, false, null)
+            return
+        }
+
+        if (wantsFloatingTimer) {
+            FloatingTimerService.updateTimer(this, isAutomationRunning, nextRefreshAtMs)
+        } else {
+            FloatingTimerService.updateTimer(this, false, null)
+        }
+    }
+
+    private fun loadFloatingTimerPreference(): Boolean {
+        val prefs = getSharedPreferences(FLOATING_PREFS, Context.MODE_PRIVATE)
+        return prefs.getBoolean(KEY_FLOATING_ENABLED, false)
+    }
+
+    private fun saveFloatingTimerPreference(enabled: Boolean) {
+        val prefs = getSharedPreferences(FLOATING_PREFS, Context.MODE_PRIVATE)
+        prefs.edit().putBoolean(KEY_FLOATING_ENABLED, enabled).apply()
+    }
+
     private fun isIgnoringBatteryOptimizations(): Boolean {
         val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
         return pm?.isIgnoringBatteryOptimizations(packageName) == true
+    }
+
+    private fun keepScreenOn(enable: Boolean) {
+        if (enable) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    private fun acquireWakeLock() {
+        val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
+        if (wakeLock?.isHeld == true) return
+        wakeLock = pm.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+            "FiverrAutoRefresher:AutomationWakeLock"
+        ).apply {
+            setReferenceCounted(false)
+            try {
+                acquire()
+            } catch (_: SecurityException) {
+                // WAKE_LOCK permission might be denied; ignore silently.
+            }
+        }
+    }
+
+    private fun releaseWakeLock() {
+        try {
+            wakeLock?.takeIf { it.isHeld }?.release()
+        } catch (_: Exception) {
+            // Ignore errors on release
+        }
+        wakeLock = null
     }
 
     private fun updateIntervalFromInput() {
@@ -402,6 +580,42 @@ class MainActivity : ComponentActivity() {
         updateAutoRefreshStatus(isAutomationRunning)
     }
 
+    private fun startCountdownIfNeeded() {
+        if (!isAutomationRunning) return
+        handler.removeCallbacks(countdownRunnable)
+        handler.post(countdownRunnable)
+    }
+
+    private fun stopCountdown() {
+        handler.removeCallbacks(countdownRunnable)
+        updateNextRefreshDisplay()
+    }
+
+    private fun updateNextRefreshDisplay() {
+        val nextText = nextRefreshAtMs?.let { target ->
+            val remainingMs = target - System.currentTimeMillis()
+            if (remainingMs <= 0) {
+                "Next refresh: refreshing..."
+            } else {
+                val minutes = remainingMs / 60_000
+                val seconds = (remainingMs / 1_000) % 60
+                String.format("Next refresh: %d:%02d", minutes, seconds)
+            }
+        } ?: "Next refresh: --"
+        nextRefreshView?.text = nextText
+    }
+
+    private val countdownRunnable = object : Runnable {
+        override fun run() {
+            if (!isAutomationRunning) {
+                updateNextRefreshDisplay()
+                return
+            }
+            updateNextRefreshDisplay()
+            handler.postDelayed(this, 1_000L)
+        }
+    }
+
     companion object {
         private const val AUTOMATION_TAP_X = 500f
         private const val AUTOMATION_TAP_Y = 1200f
@@ -410,6 +624,8 @@ class MainActivity : ComponentActivity() {
         private const val MAX_INTERVAL_MINUTES = 60
         private const val APP_LAUNCH_WAIT_MS = 2_500L
         private const val APP_TITLE = "Fiverr Auto Refresher"
+        private const val FLOATING_PREFS = "floating_timer_prefs"
+        private const val KEY_FLOATING_ENABLED = "floating_timer_enabled"
         private val KNOWN_FIVERR_PACKAGES = listOf(
             "com.fiverr.fiverr",
             "com.fiverr.fiverrapp"

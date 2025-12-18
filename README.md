@@ -28,6 +28,7 @@ Keep your Fiverr profile active with a lightweight, accessibility-driven auto re
 - Stop: tap “Stop Automation” (re-enables Start).
 - Tap Test: runs a one-time Fiverr open + refresh to verify setup.
 - Accessibility needed? If the service is off, the app will take you to Accessibility Settings; enable it, then retry.
+- Floating timer (optional): tap “Enable Floating Timer,” grant “Draw over other apps,” then start automation. A movable bubble shows the live countdown; drag to reposition (it snaps to an edge) and tap it anytime to reopen the app.
 
 ## Notes and tips
 - If the service stops (reboot, power-saving), re-enable it in Accessibility.
@@ -41,4 +42,5 @@ Keep your Fiverr profile active with a lightweight, accessibility-driven auto re
 
 ## Permissions
 - Accessibility Service (required for gestures)
+- Display over other apps (only if you enable the floating timer bubble)
 - Request ignore battery optimizations (optional but recommended for stability)

@@ -38,6 +38,28 @@
             android:textColor="@color/color_on_surface_dark"
             android:textSize="14sp" />
 
+        <TextView
+            android:id="@+id/textNextRefresh"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:gravity="center"
+            android:background="@drawable/next_refresh_chip"
+            android:text="Next refresh: --"
+            android:textColor="@android:color/white"
+            android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/buttonFloatingTimer"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/btn_secondary"
+            android:text="Enable Floating Timer"
+            android:textAllCaps="false"
+            android:textColor="@android:color/white"
+            android:fontFamily="sans-serif-medium" />
+
         <com.google.android.material.textfield.TextInputLayout
             android:id="@+id/textInputInterval"
             style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
