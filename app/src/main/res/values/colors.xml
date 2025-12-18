@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="color_primary">#1DBF73</color>
+    <color name="color_primary_variant">#139B5B</color>
+    <color name="color_secondary">#0F766E</color>
+    <color name="color_surface">#0C1A12</color>
+    <color name="color_surface_light">#F4FBF7</color>
+    <color name="color_on_surface_dark">#DFF7E8</color>
+    <color name="color_on_surface_light">#0B1B12</color>
+    <color name="color_panel_dark">#102219</color>
+    <color name="color_panel_light">#FFFFFF</color>
+</resources>
