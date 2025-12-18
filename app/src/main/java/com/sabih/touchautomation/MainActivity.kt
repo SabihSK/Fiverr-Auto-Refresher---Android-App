@@ -1,5 +1,6 @@
 package com.sabih.touchautomation
 
+import android.accessibilityservice.AccessibilityService
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -16,20 +17,23 @@ import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.isVisible
-import com.sabih.touchautomation.accessibility.MyAccessibilityService
-import com.sabih.touchautomation.ui.theme.FiverrAutoRefresherTheme
 import android.view.accessibility.AccessibilityManager
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.net.Uri
+import android.view.accessibility.AccessibilityNodeInfo
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.sabih.touchautomation.accessibility.MyAccessibilityService
+import com.sabih.touchautomation.ui.theme.FiverrAutoRefresherTheme
+import java.util.ArrayDeque
 
 class MainActivity : ComponentActivity() {
     private val handler = Handler(Looper.getMainLooper())
@@ -42,10 +46,12 @@ class MainActivity : ComponentActivity() {
     private var stopButtonRef: Button? = null
     private var batteryButtonRef: Button? = null
     private var floatingTimerButtonRef: Button? = null
+    private var homeNavButtonRef: Button? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var nextRefreshView: TextView? = null
     private var nextRefreshAtMs: Long? = null
     private var wantsFloatingTimer = false
+    private var forceNavigateHome = false
     private var pendingEnableFloatingTimer = false
 
     private val batteryOptLauncher = registerForActivityResult(
@@ -93,8 +99,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Schedule a single refresh after the app has had time to appear.
-            val refreshRunnable = Runnable {
+            val runRefresh: () -> Unit = {
                 if (isAutomationRunning && MyAccessibilityService.isServiceRunning()) {
                     val coords = refreshCoordinates()
                     MyAccessibilityService.instance?.dragTopToBottom(
@@ -102,13 +107,27 @@ class MainActivity : ComponentActivity() {
                         coords.startY,
                         coords.endY
                     )
-                    // After this refresh, set the next target for the interval.
                     nextRefreshAtMs = System.currentTimeMillis() + autoRefreshIntervalMs
                     startCountdownIfNeeded()
                     refreshFloatingTimer()
                 }
                 pendingRefreshRunnable = null
             }
+
+            // Schedule a single refresh after the app has had time to appear (and optionally return home).
+            val refreshRunnable = Runnable {
+                if (!isAutomationRunning || !MyAccessibilityService.isServiceRunning()) {
+                    pendingRefreshRunnable = null
+                    return@Runnable
+                }
+                val serviceInstance = MyAccessibilityService.instance
+                if (forceNavigateHome && serviceInstance != null) {
+                    navigateToFiverrHome(serviceInstance) { runRefresh() }
+                } else {
+                    runRefresh()
+                }
+            }
+
             pendingRefreshRunnable = refreshRunnable
             nextRefreshAtMs = System.currentTimeMillis() + APP_LAUNCH_WAIT_MS
             startCountdownIfNeeded()
@@ -123,6 +142,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         wantsFloatingTimer = loadFloatingTimerPreference()
+        forceNavigateHome = loadNavigateHomePreference()
         enableEdgeToEdge()
         setContent {
             FiverrAutoRefresherTheme {
@@ -140,6 +160,7 @@ class MainActivity : ComponentActivity() {
                                 val batteryButton = findViewById<Button>(R.id.buttonBatterySettings)
                                 val accessibilityButton = findViewById<Button>(R.id.buttonAccessibilitySettings)
                                 val floatingTimerButton = findViewById<Button>(R.id.buttonFloatingTimer)
+                                val homeNavigationButton = findViewById<Button>(R.id.buttonHomeNavigation)
                                 autoRefreshInfoView = findViewById(R.id.textAutoRefreshInfo)
                                 intervalInput = findViewById(R.id.editIntervalMinutes)
                                 nextRefreshView = findViewById(R.id.textNextRefresh)
@@ -147,11 +168,13 @@ class MainActivity : ComponentActivity() {
                                 stopButtonRef = stopButton
                                 batteryButtonRef = batteryButton
                                 floatingTimerButtonRef = floatingTimerButton
+                                homeNavButtonRef = homeNavigationButton
                                 updateAutoRefreshStatus(isAutomationRunning)
                                 updateButtonStates()
                                 updateBatteryButtonVisibility()
                                 updateNextRefreshDisplay()
                                 updateFloatingTimerButton()
+                                updateHomeNavButton()
 
                                 startButton.setOnClickListener { startAutomationWithChecks(context) }
 
@@ -167,12 +190,7 @@ class MainActivity : ComponentActivity() {
                                 tapButton.setOnClickListener {
                                     val service = MyAccessibilityService.instance
                                     if (service == null || !MyAccessibilityService.isServiceRunning()) {
-                                        Toast.makeText(
-                                            context,
-                                            "Enable Accessibility Service",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                        openAccessibilitySettings()
+                                        showAccessibilityHelpDialog()
                                         return@setOnClickListener
                                     }
 
@@ -187,13 +205,22 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
 
-                                    handler.postDelayed({
+                                    val serviceInstance = MyAccessibilityService.instance
+                                    val runTapTest: () -> Unit = {
                                         val coords = refreshCoordinates()
                                         MyAccessibilityService.instance?.dragTopToBottom(
                                             coords.x,
                                             coords.startY,
                                             coords.endY
                                         )
+                                    }
+
+                                    handler.postDelayed({
+                                        if (forceNavigateHome && serviceInstance != null) {
+                                            navigateToFiverrHome(serviceInstance) { runTapTest() }
+                                        } else {
+                                            runTapTest()
+                                        }
                                     }, APP_LAUNCH_WAIT_MS)
                                 }
 
@@ -206,11 +233,15 @@ class MainActivity : ComponentActivity() {
                                 }
 
                                 accessibilityButton.setOnClickListener {
-                                    openAccessibilitySettings()
+                                    showAccessibilityHelpDialog()
                                 }
 
                                 floatingTimerButton.setOnClickListener {
                                     toggleFloatingTimer()
+                                }
+
+                                homeNavigationButton.setOnClickListener {
+                                    toggleHomeNavigation()
                                 }
 
                                 promptBatteryOptimizationIfNeeded()
@@ -226,12 +257,7 @@ class MainActivity : ComponentActivity() {
         updateIntervalFromInput()
 
         if (!isAccessibilityReady()) {
-            Toast.makeText(
-                context,
-                "Enable the Accessibility Service first.",
-                Toast.LENGTH_SHORT
-            ).show()
-            openAccessibilitySettings()
+            showAccessibilityHelpDialog()
             return
         }
 
@@ -327,6 +353,44 @@ class MainActivity : ComponentActivity() {
         startActivity(intent)
     }
 
+    private fun showAccessibilityHelpDialog() {
+        val message = """
+            Android 13+ blocks Accessibility for sideloaded apps until you allow restricted settings.
+
+            1) Open App info for Fiverr Auto Refresher and tap the three dots.
+            2) Enable \"Allow restricted settings\".
+            3) Return to Accessibility settings and switch on \"Fiverr Auto Refresher\".
+        """.trimIndent()
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Enable Accessibility")
+            .setMessage(message)
+            .setPositiveButton("Open Accessibility Settings") { _, _ ->
+                openAccessibilitySettings()
+            }
+            .setNeutralButton("Open App Info") { _, _ ->
+                openAppInfo()
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun openAppInfo() {
+        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.parse("package:$packageName")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+            startActivity(intent)
+        } catch (e: Exception) {
+            Toast.makeText(
+                this,
+                "Unable to open App info on this device.",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
     private fun openBatteryOptimizationSettings() {
         val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
         val isIgnored = pm?.isIgnoringBatteryOptimizations(packageName) == true
@@ -411,6 +475,7 @@ class MainActivity : ComponentActivity() {
         stopButtonRef = null
         batteryButtonRef = null
         floatingTimerButtonRef = null
+        homeNavButtonRef = null
         nextRefreshView = null
         releaseWakeLock()
     }
@@ -437,6 +502,14 @@ class MainActivity : ComponentActivity() {
             "Disable Floating Timer"
         } else {
             "Enable Floating Timer"
+        }
+    }
+
+    private fun updateHomeNavButton() {
+        homeNavButtonRef?.text = if (forceNavigateHome) {
+            "Go to Fiverr Home before refresh: ON"
+        } else {
+            "Go to Fiverr Home before refresh: OFF"
         }
     }
 
@@ -495,6 +568,51 @@ class MainActivity : ComponentActivity() {
         updateFloatingTimerButton()
     }
 
+    private fun toggleHomeNavigation() {
+        forceNavigateHome = !forceNavigateHome
+        saveNavigateHomePreference(forceNavigateHome)
+        updateHomeNavButton()
+        Toast.makeText(
+            this,
+            if (forceNavigateHome) {
+                "Will try to go to Fiverr home before each refresh."
+            } else {
+                "Will refresh wherever Fiverr is currently open."
+            },
+            Toast.LENGTH_SHORT
+        ).show()
+    }
+
+    private fun navigateToFiverrHome(service: MyAccessibilityService, onComplete: () -> Unit) {
+        val isFiverrForeground: () -> Boolean = {
+            KNOWN_FIVERR_PACKAGES.any { pkg -> service.isPackageOnTop(pkg) }
+        }
+
+        val tapHomeAndFinish: () -> Unit = {
+            val homeNode = service.rootInActiveWindow.findHomeNode()
+            if (homeNode != null) {
+                homeNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            } else {
+                tryTapBottomHome(service)
+            }
+            handler.postDelayed({
+                if (isAutomationRunning) onComplete()
+            }, HOME_NAVIGATION_SETTLE_MS)
+        }
+
+        // If Fiverr isn't on top, bring it to foreground first, then tap Home.
+        if (!isFiverrForeground()) {
+            openFiverrApp(showToast = false)
+            handler.postDelayed({
+                if (!isAutomationRunning) return@postDelayed
+                tapHomeAndFinish()
+            }, APP_LAUNCH_WAIT_MS)
+            return
+        }
+
+        tapHomeAndFinish()
+    }
+
     private fun openOverlayPermissionSettings() {
         val intent = Intent(
             Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -532,6 +650,16 @@ class MainActivity : ComponentActivity() {
     private fun saveFloatingTimerPreference(enabled: Boolean) {
         val prefs = getSharedPreferences(FLOATING_PREFS, Context.MODE_PRIVATE)
         prefs.edit().putBoolean(KEY_FLOATING_ENABLED, enabled).apply()
+    }
+
+    private fun loadNavigateHomePreference(): Boolean {
+        val prefs = getSharedPreferences(FLOATING_PREFS, Context.MODE_PRIVATE)
+        return prefs.getBoolean(KEY_NAVIGATE_HOME, false)
+    }
+
+    private fun saveNavigateHomePreference(enabled: Boolean) {
+        val prefs = getSharedPreferences(FLOATING_PREFS, Context.MODE_PRIVATE)
+        prefs.edit().putBoolean(KEY_NAVIGATE_HOME, enabled).apply()
     }
 
     private fun isIgnoringBatteryOptimizations(): Boolean {
@@ -616,6 +744,14 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun tryTapBottomHome(service: MyAccessibilityService): Boolean {
+        val metrics = service.resources.displayMetrics
+        val x = metrics.widthPixels * HOME_TAB_X_FRACTION
+        val y = metrics.heightPixels * HOME_TAB_Y_FRACTION
+        service.tap(x, y)
+        return true
+    }
+
     companion object {
         private const val AUTOMATION_TAP_X = 500f
         private const val AUTOMATION_TAP_Y = 1200f
@@ -623,9 +759,13 @@ class MainActivity : ComponentActivity() {
         private const val MIN_INTERVAL_MINUTES = 1
         private const val MAX_INTERVAL_MINUTES = 60
         private const val APP_LAUNCH_WAIT_MS = 2_500L
+        private const val HOME_NAVIGATION_SETTLE_MS = 500L
+        private const val HOME_TAB_X_FRACTION = 0.12f // Bottom-left nav item
+        private const val HOME_TAB_Y_FRACTION = 0.92f // Near bottom nav bar
         private const val APP_TITLE = "Fiverr Auto Refresher"
         private const val FLOATING_PREFS = "floating_timer_prefs"
         private const val KEY_FLOATING_ENABLED = "floating_timer_enabled"
+        private const val KEY_NAVIGATE_HOME = "navigate_home_first"
         private val KNOWN_FIVERR_PACKAGES = listOf(
             "com.fiverr.fiverr",
             "com.fiverr.fiverrapp"
@@ -638,3 +778,22 @@ private data class RefreshCoordinates(
     val startY: Float,
     val endY: Float
 )
+
+private fun AccessibilityNodeInfo?.findHomeNode(): AccessibilityNodeInfo? {
+    this ?: return null
+    val queue: ArrayDeque<AccessibilityNodeInfo> = ArrayDeque()
+    queue.add(this)
+    while (queue.isNotEmpty()) {
+        val node = queue.removeFirst()
+        val text = node.text?.toString()?.lowercase()
+        val desc = node.contentDescription?.toString()?.lowercase()
+        val looksLikeHome = (text?.contains("home") == true) || (desc?.contains("home") == true)
+        if (looksLikeHome && node.isClickable && node.isEnabled) {
+            return node
+        }
+        for (i in 0 until node.childCount) {
+            node.getChild(i)?.let { queue.add(it) }
+        }
+    }
+    return null
+}
