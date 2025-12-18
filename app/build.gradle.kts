@@ -10,6 +10,17 @@ android {
         version = release(36)
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = file("../my-release.keystore")
+            storePassword = "sabih.sk1"
+            keyAlias = "my_alias"
+            keyPassword = "sabih.sk1"
+            enableV1Signing = true
+            enableV2Signing = true
+        }
+    }
+
     defaultConfig {
         applicationId = "com.sabih.touchautomation"
         minSdk = 28
@@ -24,6 +35,7 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
