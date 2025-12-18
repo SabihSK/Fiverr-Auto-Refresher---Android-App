@@ -1,7 +1,9 @@
 # Fiverr Auto Refresher
 
-![Main screen with controls](app_images/1.png)
-![Floating timer bubble overlay](app_images/2.png)
+<p align="center">
+  <img src="app_images/1.png" alt="Main control screen" width="320"/>
+  <img src="app_images/2.png" alt="Floating timer bubble overlay" width="200"/>
+</p>
 
 What you see above:
 - Left: the in-app control panel where you set the refresh interval, start/stop automation, run a one-time Tap Test, and jump to Accessibility/Battery settings.
